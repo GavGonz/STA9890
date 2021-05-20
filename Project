@@ -1,0 +1,205 @@
+library(dplyr)
+library(glmnet)
+library(tidyverse)
+rm(list=ls())
+cat("\014")
+
+library(readxl)
+covid19_dataset <- read_excel("Desktop/STA 9890/covid19_dataset.xlsx")
+filtered_dataset = na.omit(covid19_dataset)
+filtered_dataset = filtered_dataset %>% filter((short_y > 0) | (short_no > 0)) %>%
+  select(-date, -state, -geocoded_state)
+filtered_dataset = filtered_dataset %>% rename(d_short.y = short_y, d_short_n = short_no, w_short.y = critical_staffing_shortage_anticipated_within_week_yes,
+                                               w_short.n = critical_staffing_shortage_anticipated_within_week_no)
+#################################################################################
+# Goal: predict the number of hospitals that will have staff shortage next week
+# staring siz: n= 22859 and p = 97
+# Filter datasets and remove observations with NA: n = 15079
+# filter observations when staff shortage was not reported, removed date and state
+# final: n=14906 and p = 94
+#################################################################################
+n = nrow(filtered_dataset)
+m = 100
+Rsq.test.ls = rep(0,m)  
+Rsq.train.ls = rep(0,m)
+Rsq.test.en = rep(0,m)  
+Rsq.train.en = rep(0,m)
+Rsq.test.rd = rep(0, m)
+Rsq.train.rd = rep(0, m)
+train_size = .8*n
+for (m in c(1:m)) {
+  train_indexes = sample(1:n, train_size)
+  d_train = filtered_dataset[train_indexes, ]
+  d_test = filtered_dataset[-train_indexes, ]
+ 
+  x_train = as.matrix(d_train[, -4])
+  y_train = as.numeric(unlist(d_train[, 4]))
+  x_test= as.matrix(d_test[, -4])
+  y_test = as.numeric(unlist(d_test[, 4]))
+ 
+  # Ridge regression alpha = 0
+  learn_rd = cv.glmnet(x_train, y_train, intercept = FALSE, nfolds = 10, alpha = 0)
+  fit_rd = glmnet(x_train, y_train, intercept = FALSE, alpha = 0, lambda = learn_rd$lambda.min)
+  y_train_rd = predict(fit_rd, newx = x_train, type = "response")
+  y_test_rd = predict(fit_rd, newx = x_test, type = "response")
+  Rsq.train.rd[m] = 1 - mean((y_train - y_train_rd)^2)/mean((y_train - mean(y_train))^2)
+  Rsq.test.rd[m] = 1-mean((y_test - y_test_rd)^2)/mean((y_test - mean(y_test))^2)
+ 
+  # Elastic net regression, alpha = .5
+  learn_en = cv.glmnet(x_train, y_train, intercept = FALSE, alpha = 0.5, nfolds = 10)
+  fit_en = glmnet(x_train, y_train, intercept = FALSE, alpha = 0.5, lambda = learn_en$lambda.min)
+  y_train_en = predict(fit_en, newx = x_train, type = 'response')
+  y_test_en = predict(fit_en, newx = x_test, type = "response")
+  Rsq.train.en[m] = 1 - mean((y_train - y_train_en)^2)/mean((y_train - mean(y_train))^2)
+  Rsq.test.en[m] = 1-mean((y_test - y_test_en)^2)/mean((y_test - mean(y_test))^2)
+ 
+  # Lasso regression, alpha = 1
+  learn_ls = cv.glmnet(x_train, y_train, intercept = FALSE, alpha = 1, nfolds = 10)
+  fit_ls = glmnet(x_train, y_train, intercept = FALSE, alpha = 1, lambda = learn_ls$lambda.min)
+  y_train_ls = predict(fit_ls, newx = x_train, type = 'response')
+  y_test_ls = predict(fit_ls, newx = x_test, type = "response")
+  Rsq.train.ls[m] = 1 - mean((y_train - y_train_ls)^2)/mean((y_train - mean(y_train))^2)
+  Rsq.test.ls[m] = 1-mean((y_test - y_test_ls)^2)/mean((y_test - mean(y_test))^2)
+ 
+  print(m)
+}
+
+#### R square
+par(mfrow= c(1,1))
+Rsq_test = cbind(Rsq.test.en, Rsq.test.ls, Rsq.test.rd)
+Rsq_train = cbind(Rsq.train.en, Rsq.train.ls, Rsq.train.rd)
+boxplot(Rsq_train, ylim= c(0, 1), title = "R Square values")
+boxplot(Rsq_test, ylim = c(0, 1))
+
+# select one sample from the 100 samples ran earlier
+set.seed(5)
+train_indexes = sample(1:n, train_size)
+d_train = filtered_dataset[train_indexes, ]
+d_test = filtered_dataset[-train_indexes, ]
+
+x_train = as.matrix(d_train[, -4])
+y_train = as.numeric(unlist(d_train[, 4]))
+x_test= as.matrix(d_test[, -4])
+y_test = as.numeric(unlist(d_test[, 4]))
+
+# Cross Validate and record the time
+cv_rd = cv.glmnet(x_train, y_train, type.measure = "mse", alpha = 0)
+cv_ls = cv.glmnet(x_train, y_train, type.measure = "mse", alpha = 1)
+cv_en = cv.glmnet(x_train, y_train, type.measure = "mse", alpha = 0.5)
+
+par(mfcol = c(3, 1))
+plot(cv_en, main = "Elastic Net")
+plot(cv_ls, main = "Lasso")
+plot(cv_rd,  main = "Ridge")
+
+rd_time = system.time(cv.glmnet(x_train, y_train, type.measure = "mse", alpha = 0))
+ls_time = system.time(cv.glmnet(x_train, y_train, type.measure = "mse", alpha = 1))
+en_time = system.time(cv.glmnet(x_train, y_train, type.measure = "mse", alpha = 0.5))
+time = c(en_time, ls_time, rd_time)
+
+#### train and test residuals
+fit_rd_one = glmnet(x_train, y_train, intercept = FALSE, alpha = 0, lambda = cv_rd$lambda.min)
+y_tr_rd = predict(fit_rd_one, newx = x_train, type = "response")
+y_tst_rd = predict(fit_rd_one, newx = x_test, type = "response")
+test_residual_rd = sqrt((y_test - y_tst_rd)^2)
+train_residual_rd = sqrt((y_train - y_tr_rd)^2)
+
+
+fit_ls_one = glmnet(x_train, y_train, intercept = FALSE, alpha = 1, lambda = cv_rd$lambda.min)
+y_tr_ls = predict(fit_ls_one, newx = x_train, type = "response")
+y_tst_ls = predict(fit_ls_one, newx = x_test, type = "response")
+test_residual_ls = sqrt((y_test - y_tst_ls)^2)
+train_residual_ls = sqrt((y_train - y_tr_ls)^2)
+
+
+fit_en_one = glmnet(x_train, y_train, intercept = FALSE, alpha = 0.5, lambda = cv_rd$lambda.min)
+y_tr_en = predict(fit_en_one, newx = x_train, type = "response")
+y_tst_en = predict(fit_en_one, newx = x_test, type = "response")
+test_residual_en = sqrt((y_test - y_tst_en)^2)
+train_residual_en = sqrt((y_train - y_tr_en)^2)
+
+train_residuals = cbind(train_residual_en, train_residual_ls, train_residual_rd)
+colnames(train_residuals) = c("elastic net", "lasso", "ridge")
+test_residuals = cbind(test_residual_en, test_residual_ls, test_residual_rd)
+colnames(test_residuals) = c("elastic net", "lasso", "ridge")
+
+par(mfrow=c(1, 2))
+boxplot(train_residuals, main = "Residuals from Train Dataset", ylim = c(0, 35))
+boxplot(test_residuals, main = "Residuals from Test Dataset", ylim = c(0, 35))
+
+
+##### 5. For all the data do the following:
+x = as.matrix(filtered_dataset[, -4])
+y = as.numeric(unlist(filtered_dataset[, 4]))
+hist(y, main = "Hospital Staff Shortage")
+
+rd_all = cv.glmnet(x, y, intercept = FALSE, alpha = 0, nfolds = 10)
+rd_fit = glmnet(x, y, intercept = FALSE, alpha = 0, lambda = rd_all$lambda.min)
+cv_time_rd = system.time(cv.glmnet(x, y, intercept = FALSE, alpha = 0, nfolds = 10))
+fit_time_rd = system.time(glmnet(x, y, intercept = FALSE, alpha = 0, lambda = rd_all$lambda.min))
+
+ls_all = cv.glmnet(x, y, intercept= FALSE, alpha = 1, nfolds = 10)
+ls_fit = glmnet(x, y, intercept = FALSE, alpha = 1, lambda = ls_all$lambda.min)
+cv_time_ls = system.time(cv.glmnet(x, y, intercept = FALSE, alpha = 1, nfolds = 10))
+fit_time_ls = system.time(glmnet(x, y, intercept = FALSE, alpha = 1, lambda = ls_all$lambda.min))
+
+en_all = cv.glmnet(x, y, intercept = FALSE, alpha = 0.5, nfolds = 10)
+en_fit = glmnet(x, y, intercept = FALSE, alpha = 0.5, lambda = en_all$lambda.min )
+cv_time_en = system.time(cv.glmnet(x, y, intercept = FALSE, alpha = 0.5, nfolds = 10))
+fit_time_en = system.time(glmnet(x, y, intercept = FALSE, alpha = 0.5, lambda = en_all$lambda.min))
+
+data.df <- rename(data.df,
+    `previous_day_admission_adult_covid_suspected_18_19_coverage` = `previous_day_admission_adult_covid_suspected_18-19_coverage`,
+    `previous_day_admission_adult_covid_suspected_20_29_coverage` = `previous_day_admission_adult_covid_suspected_20-29_coverage`,
+    `previous_day_admission_adult_covid_suspected_30_39_coverage` = `previous_day_admission_adult_covid_suspected_30-39_coverage`,
+    `previous_day_admission_adult_covid_suspected_40_49_coverage` = `previous_day_admission_adult_covid_suspected_40-49_coverage`,
+    `previous_day_admission_adult_covid_suspected_50_59_coverage` = `previous_day_admission_adult_covid_suspected_50-59_coverage`,
+    `previous_day_admission_adult_covid_suspected_60_69_coverage` = `previous_day_admission_adult_covid_suspected_60-69_coverage`,
+    `previous_day_admission_adult_covid_suspected_70_79_coverage` = `previous_day_admission_adult_covid_suspected_70-79_coverage`,
+    `previous_day_admission_adult_covid_suspected_18_19` = `previous_day_admission_adult_covid_suspected_18-19`,
+    `previous_day_admission_adult_covid_suspected_20_29` = `previous_day_admission_adult_covid_suspected_20-29`,
+    `previous_day_admission_adult_covid_suspected_30_39` = `previous_day_admission_adult_covid_suspected_30-39`,
+    `previous_day_admission_adult_covid_suspected_40_49` = `previous_day_admission_adult_covid_suspected_40-49`,
+    `previous_day_admission_adult_covid_suspected_50_59` = `previous_day_admission_adult_covid_suspected_50-59`,
+    `previous_day_admission_adult_covid_suspected_60_69` = `previous_day_admission_adult_covid_suspected_60-69`,
+    `previous_day_admission_adult_covid_suspected_70_79` = `previous_day_admission_adult_covid_suspected_70-79`,
+    `previous_day_admission_adult_covid_suspected_80_coverage` = `previous_day_admission_adult_covid_suspected_80+_coverage`,
+    `previous_day_admission_adult_covid_suspected_80` = `previous_day_admission_adult_covid_suspected_80+`,
+    `previous_day_admission_adult_covid_confirmed_18_19_coverage` = `previous_day_admission_adult_covid_confirmed_18-19_coverage`,
+    `previous_day_admission_adult_covid_confirmed_20_29_coverage` = `previous_day_admission_adult_covid_confirmed_20-29_coverage`,
+    `previous_day_admission_adult_covid_confirmed_30_39_coverage` = `previous_day_admission_adult_covid_confirmed_30-39_coverage`,
+    `previous_day_admission_adult_covid_confirmed_40_49_coverage` = `previous_day_admission_adult_covid_confirmed_40-49_coverage`,
+    `previous_day_admission_adult_covid_confirmed_50_59_coverage` = `previous_day_admission_adult_covid_confirmed_50-59_coverage`,
+    `previous_day_admission_adult_covid_confirmed_60_69_coverage` = `previous_day_admission_adult_covid_confirmed_60-69_coverage`,
+    `previous_day_admission_adult_covid_confirmed_70_79_coverage` = `previous_day_admission_adult_covid_confirmed_70-79_coverage`,
+    `previous_day_admission_adult_covid_confirmed_18_19` = `previous_day_admission_adult_covid_confirmed_18-19`,
+    `previous_day_admission_adult_covid_confirmed_20_29` = `previous_day_admission_adult_covid_confirmed_20-29`,
+    `previous_day_admission_adult_covid_confirmed_30_39` = `previous_day_admission_adult_covid_confirmed_30-39`,
+    `previous_day_admission_adult_covid_confirmed_40_49` = `previous_day_admission_adult_covid_confirmed_40-49`,
+    `previous_day_admission_adult_covid_confirmed_50_59` = `previous_day_admission_adult_covid_confirmed_50-59`,
+    `previous_day_admission_adult_covid_confirmed_60_69` = `previous_day_admission_adult_covid_confirmed_60-69`,
+    `previous_day_admission_adult_covid_confirmed_70_79` = `previous_day_admission_adult_covid_confirmed_70-79`,
+    `previous_day_admission_adult_covid_confirmed_80_coverage` = `previous_day_admission_adult_covid_confirmed_80+_coverage`,
+    `previous_day_admission_adult_covid_confirmed_80` = `previous_day_admission_adult_covid_confirmed_80+`,
+  )
+data.df <- as.data.frame(filtered_dataset)
+sample = sample.split(data.df$w_short.y, SplitRatio = .8)
+train = subset(data.df, sample == TRUE)
+test  = subset(data.df, sample == FALSE)
+dim(train)
+dim(test)
+  rf1 <- randomForest(
+  w_short.y ~ .,
+  data=test  
+rf2 <- randomForest(
+  w_short.y ~ .,
+  data=train
+)
+rf_test <- DALEX::explain(rf1, label = "Random Forest Test", data = data.df, y = data.df$w_short.y)
+rf_train <- DALEX::explain(rf2, label = "Random Forest Train", data = data.df, y = data.df$w_short.y)
+
+library(auditor)
+rf_test_mr <- model_residual(rf_test)
+rf_train_mr <- model_residual(rf_train)
+
+plot(rf_test_mr, rf_train_mr, type = "residual_boxplot")
