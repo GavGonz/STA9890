@@ -203,3 +203,23 @@ rf_test_mr <- model_residual(rf_test)
 rf_train_mr <- model_residual(rf_train)
 
 plot(rf_test_mr, rf_train_mr, type = "residual_boxplot")
+Thank you. You are missing the last part of the code. Can you please add it to your github.
+
+beta_en = data.frame(c(1:p), as.vector(en_fit$beta)  *s)
+colnames(beta_en) = c("attributes", "en_coef")
+beta_en$attributes = factor(beta_en$attributes, levels = beta_en$attributes[order(beta_en$en_coef, decreasing = TRUE)])
+
+beta_ls = data.frame(c(1:p), as.vector(ls_fit$beta) *s)
+colnames(beta_ls) = c("attributes", "lasso_coef")
+beta_ls$attributes = factor(beta_ls$attributes, levels = beta_ls$attributes[order(beta_ls$lasso_coef, decreasing = TRUE)])
+
+beta_rd = data.frame(c(1:p), as.vector(rd_fit$beta) * s)
+colnames(beta_rd) = c("attributes", "ridge_coef")
+beta_rd$attributes = factor(beta_rd$attributes, levels = beta_rd$attributes[order(beta_rd$ridge_coef, decreasing = TRUE)])
+
+
+enPlot = ggplot(data = beta_en, aes(x = attributes, y = en_coef)) + geom_bar(stat = "identity", fill="turquoise4", colour="black") + theme(axis.text.x = element_text(angle = 90))
+lsPlot = ggplot(data = beta_ls, aes(x = attributes, y = lasso_coef)) + geom_bar(stat = "identity", fill="turquoise4", colour="black") + theme(axis.text.x = element_text(angle = 90))
+rdPlot = ggplot(data = beta_rd, aes(x = attributes, y = ridge_coef)) + geom_bar(stat = "identity", fill="turquoise4", colour="black") + theme(axis.text.x = element_text(angle = 90))
+
+grid.arrange(enPlot, lsPlot, rdPlot, nrow = 3)
